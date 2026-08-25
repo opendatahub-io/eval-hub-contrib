@@ -11,13 +11,14 @@ from _benchmarks import DIMENSION_ABILITY_MAP, PETRI_PRIMARY_METRIC
 
 logger = logging.getLogger(__name__)
 
-
 def parse_log(log_file: Path) -> dict[str, Any]:
     import json
     with open(log_file) as f:
         data = json.load(f)
 
     status = data.get("status")
+    # Inspect writes "cancelled" when a run is stopped early but still produced
+    # a usable log; treat it like success. Any other status is a failed eval.
     if status not in ("success", "cancelled"):
         error_info = data.get("error", {}) or {}
         raise RuntimeError(
