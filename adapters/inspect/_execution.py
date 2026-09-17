@@ -107,6 +107,19 @@ def build_command(
         if sandbox not in ("none", None):
             cmd += ["--sandbox", sandbox]
 
+        # Optional model-role overrides for benchmarks that use judge/grader
+        # models (e.g. HLE defaults to an OpenRouter judge). Provider YAML can
+        # specify parameters.model_roles: {grader: "openai/gpt-4o-mini"} to
+        # override at runtime without changing inspect-evals upstream defaults.
+        model_roles = config.parameters.get("model_roles") or {}
+        if not isinstance(model_roles, dict):
+            raise ValueError(
+                f"parameters.model_roles must be a dict (got {type(model_roles).__name__}). "
+                "Example: model_roles: {grader: openai/gpt-4o-mini}"
+            )
+        for role, spec in model_roles.items():
+            cmd += ["--model-role", f"{role}={spec}"]
+
     max_tasks = config.parameters.get("max_tasks")
     if max_tasks:
         cmd += ["--max-tasks", str(max_tasks)]
@@ -126,6 +139,9 @@ def build_command(
         if isinstance(value, bool):
             value = str(value).lower()
         cmd += ["-T", f"{key}={value}"]
+
+    for key, value in config.parameters.get("model_args", {}).items():
+        cmd += ["-M", f"{key}={value}"]
 
     return cmd
 
@@ -216,9 +232,17 @@ def _petri_task_flags(
 
 def run_inspect(cmd: list[str], env: dict[str, str], log_dir: Path) -> Path:
     try:
-        result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=7200)
+        if env.get("EVALHUB_MODE", "") == "k8s":
+            # allows long running benchmarks in k8s to run indefinitely
+            timeout = None
+        else:
+            timeout = 7200
+        result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired as e:
-        raise RuntimeError("inspect eval timed out after 7200s.") from e
+        raise RuntimeError(f"inspect eval timed out after {timeout}.") from e
+    except (subprocess.SubprocessError, OSError):
+        logger.exception("Subprocess failed")
+        raise
 
     if result.returncode != 0:
         logger.error(f"inspect eval stdout:\n{result.stdout[-3000:]}")
